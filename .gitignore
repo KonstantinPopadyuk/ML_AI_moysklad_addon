@@ -1,0 +1,50 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+#Models weights
+sales_multi_goods_7_30-60_predictions.pkl
+sales_multi_goods_7_30-60.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment variables
+.env
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+.cursorignore
+.cursorrules
+
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite3 

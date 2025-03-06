@@ -1,0 +1,267 @@
+version: '3.8'
+
+services:
+##############
+## MAIN APP ##
+##############
+  main_db:
+    image: postgres:17.4-alpine3.21
+    container_name: "main_postqres_db"
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_main_data:/var/lib/postgresql/data
+    networks:
+      - custom
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: on-failure
+
+  redis:
+    image: redis:8.0-M03-alpine3.21
+    ports:
+      - "6379:6379"
+    networks:
+      - custom
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: on-failure
+
+  data_api:
+    container_name: "main_api_front"
+    build: ./DataAPIService
+    ports:
+      - "8005:8005"
+    environment:
+      REDIS_HOST: redis
+      AUTH_ACCESS_TOKEN_EXPIRE_MIN: ${AUTH_ACCESS_TOKEN_EXPIRE_MIN}
+      AUTH_FAKE_USER: ${AUTH_FAKE_USER}
+      AUTH_FAKE_PASSWORD: ${AUTH_FAKE_PASSWORD}
+      AUTH_HASHED_PASSWORD: ${AUTH_HASHED_PASSWORD}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY}
+      AUTH_JWT_ALGORITHM: ${AUTH_JWT_ALGORITHM}
+    networks:
+      - custom
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: on-failure
+
+  data_retrieval:
+    build: ./DataRetriveService
+    container_name: "data_retrieval"
+    ports:
+      - "8000:8000"
+    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+    environment:
+      #Access to MoiSklad
+      MOYSKALD_LOGIN: ${MOYSKALD_LOGIN}
+      MOYSKLAD_PASSWORD: ${MOYSKLAD_PASSWORD}
+      MOYSKLAD_TOKEN: ${MOYSKLAD_TOKEN}
+      #PostgesSQL login
+      SQLALCHEMY_DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASS}@main_db:${DB_PORT}/${DB_NAME}?async_fallback=true
+      SQLALCHEMY_SYNC_DB_URL: postgresql://${DB_USER}:${DB_PASS}@main_db:${DB_PORT}/${DB_NAME}
+      DB_HOST: main_db
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASS}
+      DB_NAME: ${DB_NAME}
+    depends_on:
+      main_db:
+        condition: service_healthy
+    networks:
+      - custom
+    restart: on-failure
+
+  ml_models:
+    build: ./MLModelsService
+    container_name: "ml_models"
+    ports:
+      - "8010:8010"
+    environment:
+      REDIS_HOST: redis
+      #PostgesSQL login
+      SQLALCHEMY_DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASS}@main_db:${DB_PORT}/${DB_NAME}?async_fallback=true
+      SQLALCHEMY_SYNC_DB_URL: postgresql://${DB_USER}:${DB_PASS}@main_db:${DB_PORT}/${DB_NAME}
+      DB_HOST: main_db
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASS}
+      DB_NAME: ${DB_NAME}
+    networks:
+      - custom
+    restart: on-failure
+
+  ai_agent:
+    build: ./AiAgentDataService
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_API_URL: ${DEEPSEEK_API_URL}
+      DEEPSEEK_API_VERSION: ${DEEPSEEK_API_VERSION}
+      DEEPSEEK_API_CHAT_MODEL: ${DEEPSEEK_API_CHAT_MODEL}
+      DEEPSEEK_API_REASONER_MODEL: ${DEEPSEEK_API_REASONER_MODEL}
+      LOGFIRE_API_KEY: ${LOGFIRE_API_KEY}
+      LOGFIRE_PROJECT_ID: ${LOGFIRE_API_KEY}
+      KAFKA_BROKER: kafka:9092
+    networks:
+      - custom
+    restart: on-failure
+
+  telegram_bot:
+    build: ./TelegramBotService
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      KAFKA_BROKER: kafka:9092
+    networks:
+      - custom
+    restart: on-failure
+
+  kafka:
+    image: bitnami/kafka:3.9.0
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_KRAFT_MODE: "true"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock
+    #   - ./data:/var/lib/kafka/data
+    networks:
+      - custom
+
+  frontend:
+    build: ./DashboardFrontendService
+    ports:
+      - "3000:3000"
+    networks:
+      - custom
+    restart: on-failure
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+    depends_on:
+      - frontend
+      - data_api
+    networks:
+      - custom
+
+##############
+## AIR FLOW ##
+##############
+  airflow_postgres:
+    container_name: "airflow_postgres"
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_airflow_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - custom
+
+  airflow-init:
+    image: apache/airflow:2.10.5
+    entrypoint: /bin/bash  
+    command: 
+      - -c
+      - |
+        airflow db migrate && \
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com && \
+        airflow connections create-default-connections
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_postgres/airflow
+      AIRFLOW__WEBSERVER__SECRET_KEY: "your-secret-key-here"
+    depends_on:
+      airflow_postgres:
+        condition: service_healthy
+    networks:
+      - custom
+
+  airflow-webserver:
+    container_name: "airflow-webserver"
+    image: apache/airflow:2.10.5
+    command: webserver
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_postgres/airflow
+      AIRFLOW__WEBSERVER__SECRET_KEY: "your-secret-key-here"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      - ./AirflowService/dags:/opt/airflow/dags
+      - ./AirflowService/logs:/opt/airflow/logs
+    depends_on:
+      airflow_postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - custom
+  
+  airflow-scheduler:
+    container_name: "airflow-scheduler"
+    image: apache/airflow:2.10.5
+    command: scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_postgres/airflow
+      AIRFLOW__WEBSERVER__SECRET_KEY: "your-secret-key-here"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      - ./AirflowService/dags:/opt/airflow/dags
+      - ./AirflowService/logs:/opt/airflow/logs
+    depends_on:
+      airflow_postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - custom
+
+networks:
+  custom:
+    driver: bridge
+    name: custom_network
+
+volumes:
+  postgres_main_data:
+  postgres_airflow_data:

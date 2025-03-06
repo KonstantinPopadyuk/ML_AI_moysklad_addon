@@ -1,0 +1,1 @@
+from .mainkb import get_main_kb

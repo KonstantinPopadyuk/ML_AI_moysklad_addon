@@ -1,0 +1,17 @@
+catboost==1.2.7
+fastapi==0.115.8
+lightgbm==4.6.0
+matplotlib==3.10.0
+numpy==1.26.4
+optuna==4.2.0
+pandas==2.2.3
+python-dotenv==1.0.1
+scikit_learn==1.6.1
+scipy==1.15.2
+SQLAlchemy==1.4.54
+uvicorn==0.34.0
+xgboost==2.1.4
+redis==5.2.1
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+
